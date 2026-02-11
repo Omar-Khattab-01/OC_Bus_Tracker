@@ -177,45 +177,6 @@
       margin-top: -2px;
     }
 
-    .progress {
-      align-self: stretch;
-      border: 1px solid var(--border);
-      background: rgba(15, 18, 24, 0.72);
-      border-radius: 14px;
-      padding: 12px;
-      font-size: 14px;
-    }
-
-    .progress h3 {
-      margin: 0 0 8px;
-      font-size: 13px;
-      letter-spacing: 0.3px;
-      text-transform: uppercase;
-      color: var(--oc-mist);
-    }
-
-    .progress .step {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 4px 0;
-      color: var(--oc-mist);
-    }
-
-    .progress .step.done { color: #d8ffe7; }
-    .progress .step.active { color: #ffe7b9; }
-    .progress .dot {
-      width: 10px;
-      height: 10px;
-      border-radius: 999px;
-      border: 1px solid var(--border);
-      background: rgba(255, 255, 255, 0.1);
-      flex: none;
-    }
-
-    .progress .step.done .dot { background: var(--ok); border-color: transparent; }
-    .progress .step.active .dot { background: var(--warn); border-color: transparent; }
-
     .card {
       border: 1px solid var(--border);
       background: rgba(15, 18, 24, 0.7);
@@ -404,32 +365,6 @@
       chat.scrollTop = chat.scrollHeight;
     }
 
-    function addProgress() {
-      const wrap = document.createElement('section');
-      wrap.className = 'progress';
-      wrap.innerHTML = `
-        <h3>Live Tracking Workflow</h3>
-        <div class="step" data-step="1"><span class="dot"></span><span>Step 1: Validate block format</span></div>
-        <div class="step" data-step="2"><span class="dot"></span><span>Step 2: Read buses from BetterTransit block</span></div>
-        <div class="step" data-step="3"><span class="dot"></span><span>Step 3: Lookup bus locations on TransSee</span></div>
-        <div class="step" data-step="4"><span class="dot"></span><span>Step 4: Return bus + location cards</span></div>
-      `;
-      chat.appendChild(wrap);
-      chat.scrollTop = chat.scrollHeight;
-      return wrap;
-    }
-
-    function setProgress(progressEl, activeStep) {
-      if (!progressEl) return;
-      const all = progressEl.querySelectorAll('.step');
-      all.forEach((el) => {
-        el.classList.remove('done', 'active');
-        const n = Number(el.getAttribute('data-step'));
-        if (n < activeStep) el.classList.add('done');
-        if (n === activeStep) el.classList.add('active');
-      });
-    }
-
     async function pollForResult(block, timeoutMs = 25000) {
       const started = performance.now();
       while (performance.now() - started < timeoutMs) {
@@ -451,11 +386,8 @@
       sendBtn.disabled = true;
 
       addMessage(message, 'user');
-      const progressEl = addProgress();
-      setProgress(progressEl, 1);
 
       try {
-        setProgress(progressEl, 2);
         const response = await fetch('/api/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -466,7 +398,6 @@
         if (response.status === 202 && data.pending) {
           statusEl.textContent = 'Warming cache...';
           addMessage(data.reply || `Warming block ${data.block}...`, 'bot');
-          setProgress(progressEl, 3);
           data = await pollForResult(data.block);
         }
 
@@ -478,7 +409,6 @@
           throw new Error(data.error || 'Lookup failed');
         }
 
-        setProgress(progressEl, 4);
         addMessage(data.reply, 'bot');
         addCards(data);
 
@@ -502,17 +432,6 @@
       input.value = '';
       sendMessage(message);
     });
-
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('demo') === '1') {
-      const demoBlock = (params.get('block') || '44-07').trim();
-      input.value = demoBlock;
-      setTimeout(() => {
-        if (input.value.trim()) {
-          form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
-        }
-      }, 700);
-    }
   </script>
 </body>
 </html>
