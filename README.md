@@ -1,11 +1,14 @@
 ---
 title: OC Bus Tracker
-emoji: 👀
+emoji: 🚌
 colorFrom: red
-colorTo: purple
+colorTo: gray
 sdk: docker
+app_port: 7860
 pinned: false
-short_description: 'Know your bus location by entering your block number '
+short_description: Chat-style OC Transpo block to bus location tracker
 ---
 
-Check out the configuration reference at https://huggingface.co/docs/hub/spaces-config-reference
+OC Bus Tracker is a chat-style web app for quickly checking live OC Transpo bus locations from a block number (for example `44-07`).
+
+Type a block number in the chat and the app returns active buses plus location text pulled from BetterTransit + TransSee.

@@ -1,0 +1,7 @@
+.git
+.gitignore
+node_modules
+npm-debug.log
+.DS_Store
+transsee_fail_*.png
+bettertransit_fail.png

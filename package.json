@@ -1,0 +1,17 @@
+{
+  "name": "oc-bus-tracker-space",
+  "version": "1.0.0",
+  "private": true,
+  "description": "OC Transpo block tracker chat app for Hugging Face Spaces",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "playwright": "^1.51.0"
+  }
+}
