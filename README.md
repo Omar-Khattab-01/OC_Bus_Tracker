@@ -32,9 +32,9 @@ OC Bus Tracker Chat is a full-stack Node.js + Playwright app that:
 
 ![OC Bus Tracker Chat Home](https://image.thum.io/get/width/1600/https://huggingface.co/spaces/OmarLKhattab/OC_Bus_Tracker)
 
-### Chat Interaction
+### Chat Interaction (Real Flow: Input -> Steps -> Result)
 
-![OC Bus Tracker Chat Interaction](https://image.thum.io/get/width/1600/crop/900/https://huggingface.co/spaces/OmarLKhattab/OC_Bus_Tracker)
+![OC Bus Tracker Chat Interaction](https://image.thum.io/get/width/1600/https://huggingface.co/spaces/OmarLKhattab/OC_Bus_Tracker?demo=1&block=44-07)
 
 ## Real Example (Input -> Output)
 
