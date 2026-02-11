@@ -394,7 +394,7 @@
           body: JSON.stringify({ message }),
         });
 
-        const data = await response.json();
+        let data = await response.json();
         if (response.status === 202 && data.pending) {
           statusEl.textContent = 'Warming cache...';
           addMessage(data.reply || `Warming block ${data.block}...`, 'bot');
