@@ -311,33 +311,37 @@ async function lookupBusOnTransSee(page, busNumber) {
   const fleetSubmit = page.locator('form[action*="fleetfind"] input[type="submit"][name="Go"]').first();
 
   let submitted = false;
-  const searchButton = page.getByRole('button', { name: /search\s*stops|go|search/i }).first();
   try {
     if ((await fleetSubmit.count()) > 0) {
-      await fleetSubmit.click({ timeout: 3000 });
+      await Promise.all([
+        page.waitForURL((url) => url.href !== startUrl, { timeout: 10000 }).catch(() => {}),
+        fleetSubmit.click({ timeout: 3000 }),
+      ]);
       submitted = true;
     }
   } catch (_) {
     // Fallback below.
   }
 
-  try {
-    if ((await searchButton.count()) > 0) {
-      await searchButton.click({ timeout: 3000 });
-      submitted = true;
-    }
-  } catch (_) {
-    // Fallback to Enter.
-  }
-
   if (!submitted) {
-    await input.press('Enter');
+    try {
+      await Promise.all([
+        page.waitForURL((url) => url.href !== startUrl, { timeout: 10000 }).catch(() => {}),
+        input.press('Enter', { timeout: 3000 }),
+      ]);
+      submitted = true;
+    } catch (_) {
+      // Fallback below.
+    }
   }
 
-  await Promise.race([
-    page.waitForURL((url) => url.href !== startUrl, { timeout: 10000 }),
-    page.waitForLoadState('networkidle', { timeout: 10000 }),
-  ]).catch(() => {});
+  // If TransSee form behavior is flaky, force the fleet query URL directly.
+  if (!submitted || page.url() === startUrl) {
+    const directUrl = `https://transsee.ca/fleetfind?a=octranspo&q=${encodeURIComponent(String(busNumber))}&Go=Go`;
+    await page.goto(directUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  }
+
+  await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
 
   await page.waitForTimeout(500);
 
