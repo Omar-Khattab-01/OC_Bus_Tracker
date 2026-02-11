@@ -121,7 +121,6 @@ function pickBestLocationLine(lines, busNumber) {
 }
 
 async function safeScreenshot(page, filePath) {
-  if (process.env.SAVE_DEBUG_SHOTS !== '1') return;
   try {
     await page.screenshot({ path: filePath, fullPage: true });
   } catch (_) {
@@ -372,15 +371,7 @@ async function main() {
   let browser;
 
   try {
-    browser = await chromium.launch({
-      headless,
-      args: [
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-      ],
-    });
+    browser = await chromium.launch({ headless });
     const context = await browser.newContext();
     context.setDefaultTimeout(15000);
 

@@ -7,8 +7,7 @@ const { execFile } = require('child_process');
 const PORT = Number(process.env.PORT || 7860);
 const TRACK_SCRIPT = path.join(__dirname, 'track_block.js');
 const RUN_TIMEOUT_MS = Number(process.env.RUN_TIMEOUT_MS || 90000);
-const TRACK_CONCURRENCY = Math.max(1, Number(process.env.TRACK_CONCURRENCY || 1));
-const MAX_QUEUE_DEPTH = Math.max(1, Number(process.env.MAX_QUEUE_DEPTH || 25));
+const TRACK_CONCURRENCY = Math.max(1, Number(process.env.TRACK_CONCURRENCY || 2));
 
 const pendingByBlock = new Map();
 const queue = [];
@@ -109,12 +108,6 @@ function fetchLiveResult(block) {
     return pendingByBlock.get(block);
   }
 
-  if (queue.length >= MAX_QUEUE_DEPTH) {
-    const err = new Error('Server is busy. Please retry in a few seconds.');
-    err.code = 429;
-    throw err;
-  }
-
   const promise = enqueue(() => runTrackProcess(block)).finally(() => {
     pendingByBlock.delete(block);
   });
@@ -162,7 +155,7 @@ async function handleLookup(req, res) {
       generatedAt: new Date().toISOString(),
     });
   } catch (err) {
-    const status = err.code === 2 ? 404 : err.code === 429 ? 429 : 500;
+    const status = err.code === 2 ? 404 : 500;
     res.status(status).json({
       ok: false,
       error: String(err.message || 'Unexpected error').slice(0, 500),
@@ -180,7 +173,6 @@ app.get('/healthz', (_req, res) => {
     queueDepth: queue.length,
     activeWorkers,
     pendingBlocks: pendingByBlock.size,
-    maxQueueDepth: MAX_QUEUE_DEPTH,
     liveOnly: true,
   });
 });
