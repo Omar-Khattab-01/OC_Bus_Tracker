@@ -36,45 +36,6 @@ OC Bus Tracker Chat is a full-stack Node.js + Playwright app that:
 
 ![OC Bus Tracker Chat Interaction](https://image.thum.io/get/width/1600/crop/900/https://huggingface.co/spaces/OmarLKhattab/OC_Bus_Tracker)
 
-## Real Example (Input -> Output)
-
-### Chat Example
-
-```text
-User: 44-07
-Bot:
-Block 44-07
-Bus 6698: past Longfields on Chapman Mills
-```
-
-### API Example
-
-Request:
-
-```bash
-curl -s -X POST https://omarLkhattab-oc-bus-tracker.hf.space/api/chat \
-  -H "content-type: application/json" \
-  --data '{"message":"44-07"}'
-```
-
-Response shape:
-
-```json
-{
-  "ok": true,
-  "block": "44-07",
-  "buses": [
-    {
-      "busNumber": "6698",
-      "locationText": "past Longfields on Chapman Mills",
-      "url": "https://transsee.ca/fleetfind?a=octranspo&findtrack=1&q=6698&Go=Go"
-    }
-  ],
-  "cached": true,
-  "reply": "Block 44-07\nBus 6698: past Longfields on Chapman Mills"
-}
-```
-
 ## Features
 
 - Chat-based UX with OC Transpo-themed design
