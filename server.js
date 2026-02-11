@@ -6,16 +6,10 @@ const { execFile } = require('child_process');
 
 const PORT = Number(process.env.PORT || 7860);
 const TRACK_SCRIPT = path.join(__dirname, 'track_block.js');
-
-const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || 60000);
-const STALE_TTL_MS = Number(process.env.STALE_TTL_MS || 300000);
-const MAX_SYNC_WAIT_MS = Number(process.env.MAX_SYNC_WAIT_MS || 4500);
 const RUN_TIMEOUT_MS = Number(process.env.RUN_TIMEOUT_MS || 90000);
 const TRACK_CONCURRENCY = Math.max(1, Number(process.env.TRACK_CONCURRENCY || 2));
 
-const cache = new Map();
 const pendingByBlock = new Map();
-
 const queue = [];
 let activeWorkers = 0;
 
@@ -29,32 +23,6 @@ function normalizeBlock(input) {
 
 function isLikelyBlock(block) {
   return /^[0-9]{1,3}-[0-9]{1,3}$/.test(block);
-}
-
-function nowMs() {
-  return Date.now();
-}
-
-function getCacheState(block) {
-  const entry = cache.get(block);
-  if (!entry) return { state: 'none', entry: null };
-
-  const now = nowMs();
-  if (entry.freshUntil > now) return { state: 'fresh', entry };
-  if (entry.staleUntil > now) return { state: 'stale', entry };
-
-  cache.delete(block);
-  return { state: 'none', entry: null };
-}
-
-function setCache(block, payload) {
-  const now = nowMs();
-  cache.set(block, {
-    payload,
-    updatedAt: now,
-    freshUntil: now + CACHE_TTL_MS,
-    staleUntil: now + STALE_TTL_MS,
-  });
 }
 
 function formatChatReply(payload) {
@@ -135,84 +103,17 @@ function enqueue(job) {
   });
 }
 
-function ensureRefresh(block) {
+function fetchLiveResult(block) {
   if (pendingByBlock.has(block)) {
     return pendingByBlock.get(block);
   }
 
-  const promise = enqueue(() => runTrackProcess(block))
-    .then((payload) => {
-      setCache(block, payload);
-      return payload;
-    })
-    .finally(() => {
-      pendingByBlock.delete(block);
-    });
+  const promise = enqueue(() => runTrackProcess(block)).finally(() => {
+    pendingByBlock.delete(block);
+  });
 
   pendingByBlock.set(block, promise);
   return promise;
-}
-
-async function getFastResult(block) {
-  const { state, entry } = getCacheState(block);
-
-  if (state === 'fresh') {
-    return {
-      status: 'ready',
-      payload: entry.payload,
-      cached: true,
-      stale: false,
-      ageMs: nowMs() - entry.updatedAt,
-    };
-  }
-
-  if (state === 'stale') {
-    ensureRefresh(block).catch(() => {
-      // Keep stale data if background refresh fails.
-    });
-
-    return {
-      status: 'ready',
-      payload: entry.payload,
-      cached: true,
-      stale: true,
-      ageMs: nowMs() - entry.updatedAt,
-    };
-  }
-
-  const refreshPromise = ensureRefresh(block);
-  const timed = await Promise.race([
-    refreshPromise.then((payload) => ({ done: true, payload })),
-    new Promise((resolve) => setTimeout(() => resolve({ done: false }), MAX_SYNC_WAIT_MS)),
-  ]);
-
-  if (timed.done) {
-    return {
-      status: 'ready',
-      payload: timed.payload,
-      cached: false,
-      stale: false,
-      ageMs: 0,
-    };
-  }
-
-  return {
-    status: 'pending',
-    retryAfterMs: 1200,
-  };
-}
-
-function makeOkResponse(result) {
-  return {
-    ok: true,
-    block: result.payload.block,
-    buses: result.payload.buses,
-    cached: result.cached,
-    stale: result.stale,
-    ageMs: result.ageMs,
-    reply: formatChatReply(result.payload),
-    generatedAt: new Date().toISOString(),
-  };
 }
 
 function parseBlockFromReq(req) {
@@ -244,20 +145,15 @@ async function handleLookup(req, res) {
   if (!validateBlockOrSend(block, res)) return;
 
   try {
-    const result = await getFastResult(block);
-
-    if (result.status === 'pending') {
-      res.status(202).json({
-        ok: false,
-        pending: true,
-        block,
-        reply: `Warming block ${block}. I will return as soon as data is ready.`,
-        retryAfterMs: result.retryAfterMs,
-      });
-      return;
-    }
-
-    res.json(makeOkResponse(result));
+    const payload = await fetchLiveResult(block);
+    res.json({
+      ok: true,
+      block: payload.block,
+      buses: payload.buses,
+      cached: false,
+      reply: formatChatReply(payload),
+      generatedAt: new Date().toISOString(),
+    });
   } catch (err) {
     const status = err.code === 2 ? 404 : 500;
     res.status(status).json({
@@ -270,33 +166,6 @@ async function handleLookup(req, res) {
 app.get('/api/track', handleLookup);
 app.post('/api/chat', handleLookup);
 
-app.get('/api/result', (req, res) => {
-  const block = normalizeBlock(req.query.block);
-  if (!validateBlockOrSend(block, res)) return;
-
-  const { state, entry } = getCacheState(block);
-  if (state === 'none') {
-    const isPending = pendingByBlock.has(block);
-    res.status(isPending ? 202 : 404).json({
-      ok: false,
-      pending: isPending,
-      error: isPending ? 'Still processing.' : 'No result yet for this block.',
-    });
-    return;
-  }
-
-  res.json({
-    ok: true,
-    block: entry.payload.block,
-    buses: entry.payload.buses,
-    cached: true,
-    stale: state === 'stale',
-    ageMs: nowMs() - entry.updatedAt,
-    reply: formatChatReply(entry.payload),
-    generatedAt: new Date().toISOString(),
-  });
-});
-
 app.get('/healthz', (_req, res) => {
   res.json({
     ok: true,
@@ -304,7 +173,7 @@ app.get('/healthz', (_req, res) => {
     queueDepth: queue.length,
     activeWorkers,
     pendingBlocks: pendingByBlock.size,
-    cacheSize: cache.size,
+    liveOnly: true,
   });
 });
 
