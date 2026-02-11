@@ -319,7 +319,7 @@
       </form>
       <div class="hint">
         <span>Use format <strong>route-block</strong>, e.g. <strong>5-07</strong>, <strong>44-07</strong>.</span>
-        <span id="latencyHint">Cache window: ~60s</span>
+        <span id="latencyHint">Always live lookup (no cache)</span>
       </div>
     </section>
   </main>
@@ -353,7 +353,7 @@
         card.innerHTML = `
           <div class="row">
             <div class="bus">#${bus.busNumber}</div>
-            <span class="pill">${data.cached ? 'cached' : 'live'}</span>
+            <span class="pill">live</span>
           </div>
           <div class="loc">${bus.locationText}</div>
           <a class="url" href="${bus.url}" target="_blank" rel="noopener noreferrer">Open in TransSee</a>
@@ -365,23 +365,9 @@
       chat.scrollTop = chat.scrollHeight;
     }
 
-    async function pollForResult(block, timeoutMs = 25000) {
-      const started = performance.now();
-      while (performance.now() - started < timeoutMs) {
-        await new Promise((resolve) => setTimeout(resolve, 1200));
-        const response = await fetch(`/api/result?block=${encodeURIComponent(block)}`);
-        let data = await response.json();
-        if (response.ok && data.ok) return data;
-        if (!data.pending && response.status !== 202) {
-          throw new Error(data.error || 'Lookup failed');
-        }
-      }
-      throw new Error('Still processing. Try again in a few seconds.');
-    }
-
     async function sendMessage(message) {
       const started = performance.now();
-      statusEl.textContent = 'Searching...';
+      statusEl.textContent = 'Fetching live data...';
       statusEl.classList.remove('ok', 'warn');
       sendBtn.disabled = true;
 
@@ -395,13 +381,7 @@
         });
 
         let data = await response.json();
-        if (response.status === 202 && data.pending) {
-          statusEl.textContent = 'Warming cache...';
-          addMessage(data.reply || `Warming block ${data.block}...`, 'bot');
-          data = await pollForResult(data.block);
-        }
-
-        if (!response.ok && response.status !== 202) {
+        if (!response.ok) {
           throw new Error(data.error || 'Lookup failed');
         }
 
@@ -413,9 +393,9 @@
         addCards(data);
 
         const elapsedMs = Math.round(performance.now() - started);
-        statusEl.textContent = data.cached ? 'Served from cache' : 'Live result';
-        statusEl.classList.add(data.cached ? 'ok' : 'warn');
-        latencyHint.textContent = `Response time: ${elapsedMs}ms${data.cached ? ' (cached)' : ''}`;
+        statusEl.textContent = 'Live result';
+        statusEl.classList.add('ok');
+        latencyHint.textContent = `Response time: ${elapsedMs}ms (live)`;
       } catch (err) {
         addMessage(err.message || 'Unexpected error.', 'bot');
         statusEl.textContent = 'Error';
