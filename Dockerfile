@@ -1,11 +1,14 @@
-FROM mcr.microsoft.com/playwright:v1.51.0-jammy
+FROM node:20-bookworm
 
 WORKDIR /app
 
-COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+COPY package.json ./
+RUN npm install --omit=dev
 
 COPY . .
+
+# Install Chromium and required system dependencies for Playwright.
+RUN npx playwright install --with-deps chromium
 
 ENV NODE_ENV=production
 ENV PORT=7860
