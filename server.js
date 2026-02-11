@@ -2,16 +2,19 @@
 
 const express = require('express');
 const path = require('path');
-const { execFile } = require('child_process');
+const { trackBlock, createBrowser, ExpectedFailure } = require('./track_block');
 
 const PORT = Number(process.env.PORT || 7860);
-const TRACK_SCRIPT = path.join(__dirname, 'track_block.js');
 const RUN_TIMEOUT_MS = Number(process.env.RUN_TIMEOUT_MS || 90000);
 const TRACK_CONCURRENCY = Math.max(1, Number(process.env.TRACK_CONCURRENCY || 2));
 
 const pendingByBlock = new Map();
 const queue = [];
 let activeWorkers = 0;
+
+let sharedBrowser = null;
+let sharedContext = null;
+let browserInitPromise = null;
 
 const app = express();
 app.use(express.json({ limit: '100kb' }));
@@ -38,47 +41,66 @@ function formatChatReply(payload) {
   return lines.join('\n');
 }
 
-function parseTrackOutput(stdoutRaw) {
-  const trimmed = String(stdoutRaw || '').trim();
-  if (!trimmed) {
-    throw new Error('No JSON output from tracker script');
+function withTimeout(promise, ms) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      const err = new Error(`Live lookup timed out after ${ms}ms`);
+      err.code = 504;
+      setTimeout(() => reject(err), ms);
+    }),
+  ]);
+}
+
+async function resetBrowserState() {
+  if (sharedContext) {
+    await sharedContext.close().catch(() => {});
+    sharedContext = null;
   }
+  if (sharedBrowser) {
+    await sharedBrowser.close().catch(() => {});
+    sharedBrowser = null;
+  }
+  browserInitPromise = null;
+}
+
+async function getSharedContext() {
+  if (sharedContext) return sharedContext;
+  if (browserInitPromise) return browserInitPromise;
+
+  browserInitPromise = (async () => {
+    sharedBrowser = await createBrowser(true);
+    sharedBrowser.on('disconnected', () => {
+      sharedBrowser = null;
+      sharedContext = null;
+      browserInitPromise = null;
+    });
+    sharedContext = await sharedBrowser.newContext();
+    sharedContext.setDefaultTimeout(15000);
+    return sharedContext;
+  })();
 
   try {
-    return JSON.parse(trimmed);
-  } catch (_) {
-    throw new Error('Invalid JSON output from tracker script');
+    return await browserInitPromise;
+  } catch (err) {
+    browserInitPromise = null;
+    throw err;
   }
 }
 
-function runTrackProcess(block) {
-  return new Promise((resolve, reject) => {
-    execFile(
-      process.execPath,
-      [TRACK_SCRIPT, block],
-      {
-        cwd: __dirname,
-        timeout: RUN_TIMEOUT_MS,
-        env: { ...process.env, HEADLESS: '1' },
-        maxBuffer: 3 * 1024 * 1024,
-      },
-      (error, stdout, stderr) => {
-        if (error) {
-          const message = String(stderr || error.message || 'Tracker failed').trim();
-          const err = new Error(message);
-          err.code = Number(error.code);
-          reject(err);
-          return;
-        }
-
-        try {
-          resolve(parseTrackOutput(stdout));
-        } catch (parseErr) {
-          reject(parseErr);
-        }
-      }
-    );
-  });
+async function runTrackLive(block) {
+  const context = await getSharedContext();
+  try {
+    return await withTimeout(trackBlock(block, { context, headless: true }), RUN_TIMEOUT_MS);
+  } catch (err) {
+    const msg = String(err && err.message ? err.message : err);
+    if (/Target page, context or browser has been closed|Browser has been closed|Connection closed/i.test(msg)) {
+      await resetBrowserState();
+      const freshContext = await getSharedContext();
+      return withTimeout(trackBlock(block, { context: freshContext, headless: true }), RUN_TIMEOUT_MS);
+    }
+    throw err;
+  }
 }
 
 function drainQueue() {
@@ -108,7 +130,7 @@ function fetchLiveResult(block) {
     return pendingByBlock.get(block);
   }
 
-  const promise = enqueue(() => runTrackProcess(block)).finally(() => {
+  const promise = enqueue(() => runTrackLive(block)).finally(() => {
     pendingByBlock.delete(block);
   });
 
@@ -155,7 +177,11 @@ async function handleLookup(req, res) {
       generatedAt: new Date().toISOString(),
     });
   } catch (err) {
-    const status = err.code === 2 ? 404 : 500;
+    let status = 500;
+    if (err instanceof ExpectedFailure && err.step === 'input') status = 400;
+    else if (err instanceof ExpectedFailure) status = 404;
+    else if (Number(err.code) === 504) status = 504;
+
     res.status(status).json({
       ok: false,
       error: String(err.message || 'Unexpected error').slice(0, 500),
@@ -174,6 +200,7 @@ app.get('/healthz', (_req, res) => {
     activeWorkers,
     pendingBlocks: pendingByBlock.size,
     liveOnly: true,
+    warmBrowser: Boolean(sharedBrowser),
   });
 });
 
@@ -183,4 +210,14 @@ app.get('*', (_req, res) => {
 
 app.listen(PORT, () => {
   console.error(`OC Bus Tracker web app listening on :${PORT}`);
+});
+
+process.on('SIGTERM', async () => {
+  await resetBrowserState();
+  process.exit(0);
+});
+
+process.on('SIGINT', async () => {
+  await resetBrowserState();
+  process.exit(0);
 });

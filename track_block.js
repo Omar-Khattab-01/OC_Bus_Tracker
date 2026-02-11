@@ -295,135 +295,108 @@ async function extractLocationTextFromTransSee(page, busNumber) {
 }
 
 async function lookupBusOnTransSee(page, busNumber) {
-  await page.goto(TRANSSEE_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  const directUrl = `https://transsee.ca/fleetfind?a=octranspo&q=${encodeURIComponent(String(busNumber))}&Go=Go`;
+  await page.goto(directUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
   await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
-  await page.waitForTimeout(250);
+  await page.waitForTimeout(350);
 
-  const input = await findBusInput(page);
-  if (!input) {
-    throw new ExpectedFailure(`Could not locate BUS_NUMBER input for bus ${busNumber}`, 'transsee', busNumber);
-  }
-
-  await input.click({ timeout: 4000 });
-  await input.fill(String(busNumber));
-
-  const startUrl = page.url();
-  const fleetSubmit = page.locator('form[action*="fleetfind"] input[type="submit"][name="Go"]').first();
-
-  let submitted = false;
-  try {
-    if ((await fleetSubmit.count()) > 0) {
-      await Promise.all([
-        page.waitForURL((url) => url.href !== startUrl, { timeout: 10000 }).catch(() => {}),
-        fleetSubmit.click({ timeout: 3000 }),
-      ]);
-      submitted = true;
-    }
-  } catch (_) {
-    // Fallback below.
-  }
-
-  if (!submitted) {
-    try {
-      await Promise.all([
-        page.waitForURL((url) => url.href !== startUrl, { timeout: 10000 }).catch(() => {}),
-        input.press('Enter', { timeout: 3000 }),
-      ]);
-      submitted = true;
-    } catch (_) {
-      // Fallback below.
-    }
-  }
-
-  // If TransSee form behavior is flaky, force the fleet query URL directly.
-  if (!submitted || page.url() === startUrl) {
-    const directUrl = `https://transsee.ca/fleetfind?a=octranspo&q=${encodeURIComponent(String(busNumber))}&Go=Go`;
-    await page.goto(directUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-  }
-
-  await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
-
-  await page.waitForTimeout(500);
-
-  const locationText = await retry(async () => {
+  let locationText = await retry(async () => {
     const line = await extractLocationTextFromTransSee(page, String(busNumber));
     if (!line) throw new Error('location not ready');
     return line;
-  }, 3, 600).catch(() => null);
+  }, 2, 450).catch(() => null);
+
+  if (!locationText) {
+    await page.goto(TRANSSEE_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+    await page.waitForTimeout(250);
+
+    const input = await findBusInput(page);
+    if (!input) {
+      throw new ExpectedFailure(`Could not locate BUS_NUMBER input for bus ${busNumber}`, 'transsee', busNumber);
+    }
+
+    await input.click({ timeout: 4000 });
+    await input.fill(String(busNumber));
+    await input.press('Enter').catch(async () => {
+      const fleetSubmit = page.locator('form[action*="fleetfind"] input[type="submit"][name="Go"]').first();
+      if ((await fleetSubmit.count()) > 0) await fleetSubmit.click({ timeout: 3000 });
+    });
+    await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+    await page.waitForTimeout(500);
+
+    locationText = await retry(async () => {
+      const line = await extractLocationTextFromTransSee(page, String(busNumber));
+      if (!line) throw new Error('location not ready');
+      return line;
+    }, 3, 600).catch(() => null);
+  }
 
   if (!locationText) {
     throw new ExpectedFailure(`No location found for bus ${busNumber}`, 'transsee', busNumber);
   }
 
-  return {
-    busNumber: String(busNumber),
-    locationText,
-    url: page.url(),
-  };
+  return { busNumber: String(busNumber), locationText, url: page.url() };
 }
 
-async function main() {
-  const blockArg = process.argv[2];
+async function createBrowser(headless = true) {
+  return chromium.launch({ headless });
+}
 
+async function trackBlock(blockArg, options = {}) {
   if (!blockArg) {
-    console.error('Usage: node track_block.js "5-07"');
-    process.exit(EXIT_EXPECTED);
-    return;
+    throw new ExpectedFailure('Usage: node track_block.js "5-07"', 'input');
   }
 
-  const headless = process.env.HEADLESS !== '0';
-  let browser;
+  let browser = null;
+  let context = options.context || null;
+  const headless = options.headless !== false;
 
   try {
-    browser = await chromium.launch({ headless });
-    const context = await browser.newContext();
-    context.setDefaultTimeout(15000);
+    if (!context) {
+      browser = await createBrowser(headless);
+      context = await browser.newContext();
+      context.setDefaultTimeout(15000);
+    }
 
     const betterTransitPage = await context.newPage();
     let busNumbers;
-
     try {
       busNumbers = await selectBlockAndReadBuses(betterTransitPage, blockArg);
     } catch (err) {
       await safeScreenshot(betterTransitPage, 'bettertransit_fail.png');
       if (err instanceof ExpectedFailure) throw err;
       throw new ExpectedFailure(`BetterTransit failure: ${err.message}`, 'bettertransit');
+    } finally {
+      await betterTransitPage.close().catch(() => {});
     }
 
     if (!busNumbers || busNumbers.length === 0) {
-      await safeScreenshot(betterTransitPage, 'bettertransit_fail.png');
       throw new ExpectedFailure(`No bus numbers found for block: ${blockArg}`, 'bettertransit');
     }
 
     const transSeePage = await context.newPage();
     const buses = [];
-
-    for (const busNumber of busNumbers) {
-      try {
-        const result = await lookupBusOnTransSee(transSeePage, busNumber);
-        buses.push(result);
-      } catch (err) {
-        await safeScreenshot(transSeePage, `transsee_fail_${String(busNumber).replace(/[^0-9A-Za-z_-]/g, '_')}.png`);
-        if (err instanceof ExpectedFailure) throw err;
-        throw new ExpectedFailure(`TransSee failure for bus ${busNumber}: ${err.message}`, 'transsee', busNumber);
+    try {
+      for (const busNumber of busNumbers) {
+        try {
+          const result = await lookupBusOnTransSee(transSeePage, busNumber);
+          buses.push(result);
+        } catch (err) {
+          await safeScreenshot(transSeePage, `transsee_fail_${String(busNumber).replace(/[^0-9A-Za-z_-]/g, '_')}.png`);
+          if (err instanceof ExpectedFailure) throw err;
+          throw new ExpectedFailure(`TransSee failure for bus ${busNumber}: ${err.message}`, 'transsee', busNumber);
+        }
       }
+    } finally {
+      await transSeePage.close().catch(() => {});
     }
 
     if (buses.length === 0) {
       throw new ExpectedFailure(`No locations extracted for block ${blockArg}`, 'transsee');
     }
 
-    process.stdout.write(JSON.stringify({ block: blockArg, buses }));
-    process.exit(EXIT_SUCCESS);
-  } catch (err) {
-    if (err instanceof ExpectedFailure) {
-      console.error(err.message);
-      process.exit(EXIT_EXPECTED);
-      return;
-    }
-
-    console.error(`Unexpected error: ${err && err.message ? err.message : String(err)}`);
-    process.exit(EXIT_UNEXPECTED);
+    return { block: blockArg, buses };
   } finally {
     if (browser) {
       await browser.close().catch(() => {});
@@ -431,4 +404,24 @@ async function main() {
   }
 }
 
-main();
+async function main() {
+  try {
+    const result = await trackBlock(process.argv[2], { headless: process.env.HEADLESS !== '0' });
+    process.stdout.write(JSON.stringify(result));
+    process.exit(EXIT_SUCCESS);
+  } catch (err) {
+    if (err instanceof ExpectedFailure) {
+      console.error(err.message);
+      process.exit(EXIT_EXPECTED);
+      return;
+    }
+    console.error(`Unexpected error: ${err && err.message ? err.message : String(err)}`);
+    process.exit(EXIT_UNEXPECTED);
+  }
+}
+
+if (require.main === module) {
+  main();
+}
+
+module.exports = { trackBlock, createBrowser, ExpectedFailure };
