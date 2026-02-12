@@ -2,19 +2,15 @@
 
 const express = require('express');
 const path = require('path');
-const { trackBlock, createBrowser, ExpectedFailure } = require('./track_block');
+const https = require('https');
 
 const PORT = Number(process.env.PORT || 7860);
-const RUN_TIMEOUT_MS = Number(process.env.RUN_TIMEOUT_MS || 90000);
-const TRACK_CONCURRENCY = Math.max(1, Number(process.env.TRACK_CONCURRENCY || 2));
+const RUN_TIMEOUT_MS = Number(process.env.RUN_TIMEOUT_MS || 25000);
+const TRACK_CONCURRENCY = Math.max(1, Number(process.env.TRACK_CONCURRENCY || 6));
 
 const pendingByBlock = new Map();
 const queue = [];
 let activeWorkers = 0;
-
-let sharedBrowser = null;
-let sharedContext = null;
-let browserInitPromise = null;
 
 const app = express();
 app.use(express.json({ limit: '100kb' }));
@@ -28,19 +24,6 @@ function isLikelyBlock(block) {
   return /^[0-9]{1,3}-[0-9]{1,3}$/.test(block);
 }
 
-function formatChatReply(payload) {
-  const buses = Array.isArray(payload?.buses) ? payload.buses : [];
-  if (!buses.length) {
-    return `Block ${payload?.block || ''}: no buses found right now.`.trim();
-  }
-
-  const lines = [`Block ${payload.block}`];
-  for (const bus of buses) {
-    lines.push(`Bus ${bus.busNumber}: ${bus.locationText}`);
-  }
-  return lines.join('\n');
-}
-
 function withTimeout(promise, ms) {
   return Promise.race([
     promise,
@@ -52,55 +35,175 @@ function withTimeout(promise, ms) {
   ]);
 }
 
-async function resetBrowserState() {
-  if (sharedContext) {
-    await sharedContext.close().catch(() => {});
-    sharedContext = null;
-  }
-  if (sharedBrowser) {
-    await sharedBrowser.close().catch(() => {});
-    sharedBrowser = null;
-  }
-  browserInitPromise = null;
-}
-
-async function getSharedContext() {
-  if (sharedContext) return sharedContext;
-  if (browserInitPromise) return browserInitPromise;
-
-  browserInitPromise = (async () => {
-    sharedBrowser = await createBrowser(true);
-    sharedBrowser.on('disconnected', () => {
-      sharedBrowser = null;
-      sharedContext = null;
-      browserInitPromise = null;
+function httpGetText(url, timeoutMs = RUN_TIMEOUT_MS) {
+  return new Promise((resolve, reject) => {
+    const req = https.get(url, (res) => {
+      let data = '';
+      res.on('data', (chunk) => {
+        data += chunk;
+      });
+      res.on('end', () => {
+        if (res.statusCode >= 400) {
+          const err = new Error(`HTTP ${res.statusCode} for ${url}`);
+          err.code = res.statusCode;
+          reject(err);
+          return;
+        }
+        resolve(data);
+      });
     });
-    sharedContext = await sharedBrowser.newContext();
-    sharedContext.setDefaultTimeout(15000);
-    return sharedContext;
-  })();
 
-  try {
-    return await browserInitPromise;
-  } catch (err) {
-    browserInitPromise = null;
-    throw err;
-  }
+    req.setTimeout(timeoutMs, () => {
+      req.destroy(new Error(`Request timeout for ${url}`));
+    });
+
+    req.on('error', reject);
+  });
 }
 
-async function runTrackLive(block) {
-  const context = await getSharedContext();
-  try {
-    return await withTimeout(trackBlock(block, { context, headless: true }), RUN_TIMEOUT_MS);
-  } catch (err) {
-    const msg = String(err && err.message ? err.message : err);
-    if (/Target page, context or browser has been closed|Browser has been closed|Connection closed/i.test(msg)) {
-      await resetBrowserState();
-      const freshContext = await getSharedContext();
-      return withTimeout(trackBlock(block, { context: freshContext, headless: true }), RUN_TIMEOUT_MS);
-    }
-    throw err;
+function getOttawaServiceDateIso() {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Toronto',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date());
+
+  const map = {};
+  for (const p of parts) map[p.type] = p.value;
+  return `${map.year}-${map.month}-${map.day}T10:00:00.000Z`;
+}
+
+function uniqueBusIdsFromTrips(trips) {
+  const set = new Set();
+  for (const trip of trips || []) {
+    const id = String(trip && trip.busId ? trip.busId : '').trim();
+    if (/^\d{3,5}$/.test(id)) set.add(id);
   }
+  return [...set];
+}
+
+function decodeEntities(s) {
+  return s
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/gi, '"');
+}
+
+function htmlToLines(html) {
+  const noScript = html
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ');
+  const text = decodeEntities(noScript.replace(/<[^>]+>/g, '\n'));
+  return text
+    .split('\n')
+    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+}
+
+function pickBestLocationLine(lines, busNumber) {
+  const cleaned = lines
+    .filter((line) => line.length >= 8 && line.length <= 260)
+    .filter((line) => !/vehicle locations - .* - transsee/i.test(line));
+
+  const precise = cleaned
+    .filter((line) => {
+      const lower = line.toLowerCase();
+      if (lower.includes('near stops by gps')) return false;
+      if (/(privacy|copyright|transsee by|search|menu|map|vehicle locations)/i.test(lower)) return false;
+      const hasStreet = lower.includes(' on ') || lower.includes(' at ');
+      const hasMarker = /\b(aprchg|approach|approaching|past|near|at|arriving)\b/i.test(lower);
+      return hasStreet && hasMarker;
+    })
+    .sort((a, b) => b.length - a.length);
+
+  if (precise.length > 0) {
+    return precise[0].replace(/\s+Last seen.*$/i, '').trim();
+  }
+
+  const scored = cleaned
+    .map((line) => {
+      const lower = line.toLowerCase();
+      let score = 0;
+      if (line.includes(busNumber)) score += 55;
+      if (lower.includes(' on ')) score += 28;
+      if (lower.includes(' going ')) score += 24;
+      if (lower.startsWith('vehicle ') || lower.includes(`vehicle ${busNumber}`)) score += 18;
+      if (/[↑↓↗↘↖↙]/.test(line)) score += 5;
+      if (lower.includes('near stops by gps')) score -= 100;
+      if (/(privacy|copyright|transsee by|search|menu|map|vehicle locations)/i.test(lower)) score -= 20;
+      score += Math.min(line.length, 140) / 14;
+      return { line, score };
+    })
+    .filter((x) => x.score >= 20)
+    .sort((a, b) => b.score - a.score || b.line.length - a.line.length);
+
+  if (scored.length > 0) {
+    return scored[0].line.replace(/\s+Last seen.*$/i, '').trim();
+  }
+
+  return null;
+}
+
+async function fetchBusesForBlock(block) {
+  const dateIso = getOttawaServiceDateIso();
+  const detailsUrl = `https://bus.ajay.app/api/blockDetails?blockId=${encodeURIComponent(block)}&date=${encodeURIComponent(dateIso)}`;
+
+  let payload;
+  try {
+    payload = JSON.parse(await httpGetText(detailsUrl));
+  } catch (err) {
+    throw new Error(`Failed to read BetterTransit data: ${err.message}`);
+  }
+
+  const trips = payload && payload[block] ? payload[block] : null;
+  if (!Array.isArray(trips)) {
+    throw Object.assign(new Error(`Block not found: ${block}`), { code: 404 });
+  }
+
+  const buses = uniqueBusIdsFromTrips(trips);
+  if (!buses.length) {
+    throw Object.assign(new Error(`No bus numbers found for block: ${block}`), { code: 404 });
+  }
+
+  return buses;
+}
+
+async function fetchLocationForBus(busNumber) {
+  const url = `https://transsee.ca/fleetfind?a=octranspo&q=${encodeURIComponent(busNumber)}&Go=Go`;
+  const html = await httpGetText(url);
+  const lines = htmlToLines(html);
+  const locationText = pickBestLocationLine(lines, busNumber);
+
+  if (!locationText) {
+    throw Object.assign(new Error(`No location found for bus ${busNumber}`), { code: 404 });
+  }
+
+  return {
+    busNumber: String(busNumber),
+    locationText,
+    url,
+  };
+}
+
+async function fetchLiveResult(block) {
+  if (pendingByBlock.has(block)) {
+    return pendingByBlock.get(block);
+  }
+
+  const job = enqueue(async () => {
+    const buses = await fetchBusesForBlock(block);
+    const locations = await Promise.all(buses.map((bus) => fetchLocationForBus(bus)));
+    return { block, buses: locations };
+  }).finally(() => {
+    pendingByBlock.delete(block);
+  });
+
+  pendingByBlock.set(block, job);
+  return job;
 }
 
 function drainQueue() {
@@ -123,19 +226,6 @@ function enqueue(job) {
     queue.push({ job, resolve, reject });
     drainQueue();
   });
-}
-
-function fetchLiveResult(block) {
-  if (pendingByBlock.has(block)) {
-    return pendingByBlock.get(block);
-  }
-
-  const promise = enqueue(() => runTrackLive(block)).finally(() => {
-    pendingByBlock.delete(block);
-  });
-
-  pendingByBlock.set(block, promise);
-  return promise;
 }
 
 function parseBlockFromReq(req) {
@@ -162,12 +252,25 @@ function validateBlockOrSend(block, res) {
   return true;
 }
 
+function formatChatReply(payload) {
+  const buses = Array.isArray(payload?.buses) ? payload.buses : [];
+  if (!buses.length) {
+    return `Block ${payload?.block || ''}: no buses found right now.`.trim();
+  }
+
+  const lines = [`Block ${payload.block}`];
+  for (const bus of buses) {
+    lines.push(`Bus ${bus.busNumber}: ${bus.locationText}`);
+  }
+  return lines.join('\n');
+}
+
 async function handleLookup(req, res) {
   const block = parseBlockFromReq(req);
   if (!validateBlockOrSend(block, res)) return;
 
   try {
-    const payload = await fetchLiveResult(block);
+    const payload = await withTimeout(fetchLiveResult(block), RUN_TIMEOUT_MS);
     res.json({
       ok: true,
       block: payload.block,
@@ -177,11 +280,8 @@ async function handleLookup(req, res) {
       generatedAt: new Date().toISOString(),
     });
   } catch (err) {
-    let status = 500;
-    if (err instanceof ExpectedFailure && err.step === 'input') status = 400;
-    else if (err instanceof ExpectedFailure) status = 404;
-    else if (Number(err.code) === 504) status = 504;
-
+    const code = Number(err.code);
+    const status = code === 400 ? 400 : code === 404 ? 404 : code === 504 ? 504 : 500;
     res.status(status).json({
       ok: false,
       error: String(err.message || 'Unexpected error').slice(0, 500),
@@ -200,7 +300,7 @@ app.get('/healthz', (_req, res) => {
     activeWorkers,
     pendingBlocks: pendingByBlock.size,
     liveOnly: true,
-    warmBrowser: Boolean(sharedBrowser),
+    mode: 'direct-http',
   });
 });
 
@@ -210,14 +310,4 @@ app.get('*', (_req, res) => {
 
 app.listen(PORT, () => {
   console.error(`OC Bus Tracker web app listening on :${PORT}`);
-});
-
-process.on('SIGTERM', async () => {
-  await resetBrowserState();
-  process.exit(0);
-});
-
-process.on('SIGINT', async () => {
-  await resetBrowserState();
-  process.exit(0);
 });
