@@ -3,9 +3,11 @@
 const express = require('express');
 const path = require('path');
 const https = require('https');
+const { trackBlock } = require('./track_block');
 
 const PORT = Number(process.env.PORT || 7860);
 const RUN_TIMEOUT_MS = Number(process.env.RUN_TIMEOUT_MS || 25000);
+const FALLBACK_TIMEOUT_MS = Number(process.env.FALLBACK_TIMEOUT_MS || 90000);
 const TRACK_CONCURRENCY = Math.max(1, Number(process.env.TRACK_CONCURRENCY || 6));
 
 const pendingByBlock = new Map();
@@ -114,9 +116,9 @@ function pickBestLocationLine(lines, busNumber) {
       const lower = line.toLowerCase();
       if (lower.includes('near stops by gps')) return false;
       if (/(privacy|copyright|transsee by|search|menu|map|vehicle locations)/i.test(lower)) return false;
-      const hasStreet = lower.includes(' on ') || lower.includes(' at ');
       const hasMarker = /\b(aprchg|approach|approaching|past|near|at|arriving)\b/i.test(lower);
-      return hasStreet && hasMarker;
+      if (!hasMarker) return false;
+      return true;
     })
     .sort((a, b) => b.length - a.length);
 
@@ -206,6 +208,16 @@ async function fetchLiveResult(block) {
   return job;
 }
 
+async function fetchLiveResultWithFallback(block) {
+  try {
+    return await withTimeout(fetchLiveResult(block), RUN_TIMEOUT_MS);
+  } catch (directErr) {
+    if (Number(directErr.code) === 400) throw directErr;
+    const fallback = await withTimeout(trackBlock(block, { headless: true }), FALLBACK_TIMEOUT_MS);
+    return fallback;
+  }
+}
+
 function drainQueue() {
   while (activeWorkers < TRACK_CONCURRENCY && queue.length > 0) {
     const next = queue.shift();
@@ -270,7 +282,7 @@ async function handleLookup(req, res) {
   if (!validateBlockOrSend(block, res)) return;
 
   try {
-    const payload = await withTimeout(fetchLiveResult(block), RUN_TIMEOUT_MS);
+    const payload = await fetchLiveResultWithFallback(block);
     res.json({
       ok: true,
       block: payload.block,
