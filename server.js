@@ -76,13 +76,46 @@ function getOttawaServiceDateIso() {
   return `${map.year}-${map.month}-${map.day}T10:00:00.000Z`;
 }
 
-function uniqueBusIdsFromTrips(trips) {
-  const set = new Set();
+function timeToSeconds(value) {
+  const t = String(value || '').trim();
+  const m = t.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (!m) return null;
+  const hh = Number(m[1]);
+  const mm = Number(m[2]);
+  const ss = Number(m[3] || 0);
+  return hh * 3600 + mm * 60 + ss;
+}
+
+function pickMostRecentBusId(trips) {
+  const candidates = [];
   for (const trip of trips || []) {
-    const id = String(trip && trip.busId ? trip.busId : '').trim();
-    if (/^\d{3,5}$/.test(id)) set.add(id);
+    const busId = String(trip && trip.busId ? trip.busId : '').trim();
+    if (!/^\d{3,5}$/.test(busId)) continue;
+
+    const actualEnd = timeToSeconds(trip.actualEndTime);
+    const actualStart = timeToSeconds(trip.actualStartTime);
+    const scheduledStart = timeToSeconds(trip.scheduledStartTime);
+
+    // Prefer trips with real actual telemetry. Fall back to schedule only when needed.
+    const hasActual = actualEnd !== null || actualStart !== null;
+    const rank = hasActual ? (actualEnd ?? actualStart) : (scheduledStart ?? -1);
+
+    candidates.push({
+      busId,
+      hasActual: hasActual ? 1 : 0,
+      rank,
+      tie: actualStart ?? actualEnd ?? scheduledStart ?? -1,
+    });
   }
-  return [...set];
+
+  candidates.sort((a, b) =>
+    b.hasActual - a.hasActual ||
+    b.rank - a.rank ||
+    b.tie - a.tie ||
+    b.busId.localeCompare(a.busId, undefined, { numeric: true })
+  );
+
+  return candidates.length ? candidates[0].busId : null;
 }
 
 function decodeEntities(s) {
@@ -166,12 +199,12 @@ async function fetchBusesForBlock(block) {
     throw Object.assign(new Error(`Block not found: ${block}`), { code: 404 });
   }
 
-  const buses = uniqueBusIdsFromTrips(trips);
-  if (!buses.length) {
+  const mostRecentBus = pickMostRecentBusId(trips);
+  if (!mostRecentBus) {
     throw Object.assign(new Error(`No bus numbers found for block: ${block}`), { code: 404 });
   }
 
-  return buses;
+  return [mostRecentBus];
 }
 
 async function fetchAvailableBlocks() {
