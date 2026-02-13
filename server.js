@@ -174,6 +174,45 @@ async function fetchBusesForBlock(block) {
   return buses;
 }
 
+async function fetchAvailableBlocks() {
+  const dateIso = getOttawaServiceDateIso();
+  const blocksUrl = `https://bus.ajay.app/api/blocks?date=${encodeURIComponent(dateIso)}`;
+  let payload;
+  try {
+    payload = JSON.parse(await httpGetText(blocksUrl));
+  } catch (err) {
+    throw new Error(`Failed to read block list: ${err.message}`);
+  }
+  if (!Array.isArray(payload)) {
+    throw new Error('Invalid block list payload');
+  }
+  return payload
+    .map((row) => String(row && row.blockId ? row.blockId : '').trim().toUpperCase())
+    .filter(Boolean);
+}
+
+function blockNumericKey(block) {
+  const [a, b] = String(block || '').split('-');
+  if (!/^\d+$/.test(a || '') || !/^\d+$/.test(b || '')) return null;
+  return `${Number(a)}-${Number(b)}`;
+}
+
+async function resolveCanonicalBlock(inputBlock) {
+  const available = await fetchAvailableBlocks();
+  const exact = available.find((b) => b === inputBlock);
+  if (exact) return exact;
+
+  const inputKey = blockNumericKey(inputBlock);
+  if (!inputKey) return null;
+
+  const keyToCanonical = new Map();
+  for (const b of available) {
+    const key = blockNumericKey(b);
+    if (key && !keyToCanonical.has(key)) keyToCanonical.set(key, b);
+  }
+  return keyToCanonical.get(inputKey) || null;
+}
+
 async function fetchLocationForBus(busNumber) {
   const url = `https://transsee.ca/fleetfind?a=octranspo&q=${encodeURIComponent(busNumber)}&Go=Go`;
   const html = await httpGetText(url);
@@ -278,10 +317,19 @@ function formatChatReply(payload) {
 }
 
 async function handleLookup(req, res) {
-  const block = parseBlockFromReq(req);
-  if (!validateBlockOrSend(block, res)) return;
+  const rawBlock = parseBlockFromReq(req);
+  if (!validateBlockOrSend(rawBlock, res)) return;
 
   try {
+    const block = await resolveCanonicalBlock(rawBlock);
+    if (!block) {
+      res.status(404).json({
+        ok: false,
+        error: `Block not found: ${rawBlock}`,
+      });
+      return;
+    }
+
     const payload = await fetchLiveResultWithFallback(block);
     res.json({
       ok: true,
