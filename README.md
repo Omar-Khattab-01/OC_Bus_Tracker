@@ -57,15 +57,11 @@ curl -s -X POST http://127.0.0.1:7860/api/chat \
 
 These screenshots show the expected behavior:
 
-1. Correct input (`44-07`) returns bus/location.
-2. Input without leading zero (`44-7`) is auto-mapped to the canonical block (`44-07`).
-3. No-bus-assigned case returns a no-bus-found message.
+1. Valid input (`44-7` or `44-07`) returns bus/location.
+2. No-bus-assigned case returns a no-bus-found message.
 
-### 1) Correct Input (`44-07`)
+### 1) Valid Input (`44-7` or `44-07`)
 ![Correct input example](assets/screenshots/correct-input-44-07.png)
 
-### 2) Auto-Mapped Input (`44-7` -> `44-07`)
-![Auto-mapped input example](assets/screenshots/incorrect-input-44-7.png)
-
-### 3) No Bus Assigned Yet
+### 2) No Bus Assigned Yet
 ![No bus assigned example](assets/screenshots/no-bus-assigned.png)
