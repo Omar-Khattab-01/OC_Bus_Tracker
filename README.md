@@ -52,18 +52,36 @@ curl -s -X POST http://127.0.0.1:7860/api/chat \
   --data '{"message":"44-07"}'
 ```
 
-## Screenshot Placeholders
+## Screenshot Guide
 
-Replace these placeholders with your actual screenshots.
+Use these three screenshots in your project post/readme to explain expected behavior:
+
+1. **Correct Input (works):** block entered as `44-07` and returns bus/location.
+2. **Incorrect Input (format issue):** `44-7` (missing leading zero) shows an error.
+3. **No Bus Assigned Yet:** block exists but no bus is assigned yet, so it returns a no-bus-found message.
+
+Add your screenshots with captions like this:
 
 ```md
-![App Home - Placeholder](PLACEHOLDER_HOME_SCREENSHOT_URL)
-![App Result - Placeholder](PLACEHOLDER_RESULT_SCREENSHOT_URL)
+### 1) Correct Input (`44-07`)
+![Correct input example](PLACEHOLDER_CORRECT_INPUT_SCREENSHOT_URL)
+
+### 2) Incorrect Input (`44-7`)
+![Incorrect input example](PLACEHOLDER_INCORRECT_INPUT_SCREENSHOT_URL)
+
+### 3) No Bus Assigned Yet
+![No bus assigned example](PLACEHOLDER_NO_BUS_ASSIGNED_SCREENSHOT_URL)
 ```
 
-Or if you store images in this repo:
+If you store images in this repo, use paths like:
 
 ```md
-![App Home](assets/screenshots/home.png)
-![App Result](assets/screenshots/result.png)
+### 1) Correct Input (`44-07`)
+![Correct input example](assets/screenshots/correct-input-44-07.png)
+
+### 2) Incorrect Input (`44-7`)
+![Incorrect input example](assets/screenshots/incorrect-input-44-7.png)
+
+### 3) No Bus Assigned Yet
+![No bus assigned example](assets/screenshots/no-bus-assigned.png)
 ```
