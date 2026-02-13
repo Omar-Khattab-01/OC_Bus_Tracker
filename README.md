@@ -60,22 +60,6 @@ Use these three screenshots in your project post/readme to explain expected beha
 2. **Incorrect Input (format issue):** `44-7` (missing leading zero) shows an error.
 3. **No Bus Assigned Yet:** block exists but no bus is assigned yet, so it returns a no-bus-found message.
 
-Add your screenshots with captions like this:
-
-```md
-### 1) Correct Input (`44-07`)
-![Correct input example](PLACEHOLDER_CORRECT_INPUT_SCREENSHOT_URL)
-
-### 2) Incorrect Input (`44-7`)
-![Incorrect input example](PLACEHOLDER_INCORRECT_INPUT_SCREENSHOT_URL)
-
-### 3) No Bus Assigned Yet
-![No bus assigned example](PLACEHOLDER_NO_BUS_ASSIGNED_SCREENSHOT_URL)
-```
-
-If you store images in this repo, use paths like:
-
-```md
 ### 1) Correct Input (`44-07`)
 ![Correct input example](assets/screenshots/correct-input-44-07.png)
 
@@ -84,4 +68,3 @@ If you store images in this repo, use paths like:
 
 ### 3) No Bus Assigned Yet
 ![No bus assigned example](assets/screenshots/no-bus-assigned.png)
-```
