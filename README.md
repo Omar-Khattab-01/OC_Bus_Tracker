@@ -26,9 +26,9 @@ I built this project as a live OC Transpo helper tool. It takes a **block number
 ## Block Format
 
 - `44-07` works
-- `44-7` does **not** work
+- `44-7` is automatically mapped to `44-07`
 
-Leading zeroes are required where applicable, matching the operational block format.
+The app now normalizes the second part when needed (for example `-7` -> `-07`) to reduce input mistakes.
 
 ## Testing Status
 
@@ -58,14 +58,14 @@ curl -s -X POST http://127.0.0.1:7860/api/chat \
 These screenshots show the expected behavior:
 
 1. Correct input (`44-07`) returns bus/location.
-2. Incorrect input (`44-7`) returns a format-related error.
+2. Input without leading zero (`44-7`) is auto-mapped to the canonical block (`44-07`).
 3. No-bus-assigned case returns a no-bus-found message.
 
 ### 1) Correct Input (`44-07`)
 ![Correct input example](assets/screenshots/correct-input-44-07.png)
 
-### 2) Incorrect Input (`44-7`)
-![Incorrect input example](assets/screenshots/incorrect-input-44-7.png)
+### 2) Auto-Mapped Input (`44-7` -> `44-07`)
+![Auto-mapped input example](assets/screenshots/incorrect-input-44-7.png)
 
 ### 3) No Bus Assigned Yet
 ![No bus assigned example](assets/screenshots/no-bus-assigned.png)
